@@ -20,6 +20,7 @@ import {
   cancelSubscription, 
   handleWebhookEvent 
 } from "./services/stripe";
+import { MatchingService } from "./services/matching";
 
 // Define session interface
 interface CustomSession {
@@ -185,13 +186,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "User not found" });
       }
       
-      // Get users based on preferences
-      const profiles = await storage.getNearbyUsers(user.id, user.maxDistance);
+      // Track user activity for future matching
+      await MatchingService.trackUserActivity(user.id);
+      
+      // Use advanced matching algorithm to find potential matches
+      const potentialMatches = await MatchingService.findPotentialMatches(user.id, 50);
       
       // Remove password from profiles
-      const profilesWithoutPassword = profiles.map(profile => {
-        const { password, ...profileWithoutPassword } = profile;
-        return profileWithoutPassword;
+      const profilesWithoutPassword = potentialMatches.map(match => {
+        const { password, ...profileWithoutPassword } = match.user;
+        return {
+          ...profileWithoutPassword,
+          compatibilityScore: match.compatibilityScore
+        };
       });
       
       // Filter out users that current user already liked
@@ -204,7 +211,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       return res.status(200).json(filteredProfiles);
     } catch (error) {
-      return res.status(500).json({ message: "Internal server error" });
+      console.error("Error in discover:", error);
+      // Fallback to traditional matching if advanced matching fails
+      try {
+        const user = await storage.getUser(req.session.userId!);
+        if (!user) {
+          return res.status(404).json({ message: "User not found" });
+        }
+        
+        // Get users based on preferences using traditional matching
+        const profiles = await storage.getNearbyUsers(user.id, user.maxDistance);
+        
+        // Remove password from profiles
+        const profilesWithoutPassword = profiles.map(profile => {
+          const { password, ...profileWithoutPassword } = profile;
+          return profileWithoutPassword;
+        });
+        
+        // Filter out users that current user already liked
+        const userLikes = await storage.getLikesByLikerId(user.id);
+        const likedIds = new Set(userLikes.map(like => like.likedId));
+        
+        const filteredProfiles = profilesWithoutPassword.filter(profile => 
+          !likedIds.has(profile.id)
+        );
+        
+        return res.status(200).json(filteredProfiles);
+      } catch (fallbackError) {
+        console.error("Fallback error:", fallbackError);
+        return res.status(500).json({ message: "Internal server error" });
+      }
     }
   });
 
@@ -247,6 +283,63 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: error.errors });
       }
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Specialized Matching Routes
+  app.get("/api/discover/interests", isAuthenticated, async (req: RequestWithSession, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      
+      // Find matches based on shared interests
+      const matches = await MatchingService.findInterestBasedMatches(userId);
+      
+      // Remove password from matches
+      const matchesWithoutPassword = matches.map(match => {
+        const { password, ...matchWithoutPassword } = match;
+        return matchWithoutPassword;
+      });
+      
+      // Filter out users that current user already liked
+      const userLikes = await storage.getLikesByLikerId(userId);
+      const likedIds = new Set(userLikes.map(like => like.likedId));
+      
+      const filteredMatches = matchesWithoutPassword.filter(match => 
+        !likedIds.has(match.id)
+      );
+      
+      return res.status(200).json(filteredMatches);
+    } catch (error) {
+      console.error("Error finding interest-based matches:", error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+  
+  app.get("/api/discover/location", isAuthenticated, async (req: RequestWithSession, res: Response) => {
+    try {
+      const userId = req.session.userId!;
+      
+      // Find matches based on location proximity
+      const matches = await MatchingService.findLocationBasedMatches(userId);
+      
+      // Remove password from matches
+      const matchesWithoutPassword = matches.map(match => {
+        const { password, ...matchWithoutPassword } = match;
+        return matchWithoutPassword;
+      });
+      
+      // Filter out users that current user already liked
+      const userLikes = await storage.getLikesByLikerId(userId);
+      const likedIds = new Set(userLikes.map(like => like.likedId));
+      
+      const filteredMatches = matchesWithoutPassword.filter(match => 
+        !likedIds.has(match.id)
+      );
+      
+      return res.status(200).json(filteredMatches);
+    } catch (error) {
+      console.error("Error finding location-based matches:", error);
       return res.status(500).json({ message: "Internal server error" });
     }
   });
