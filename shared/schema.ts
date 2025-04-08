@@ -1,6 +1,7 @@
-import { pgTable, text, serial, integer, boolean, jsonb, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, jsonb, timestamp, primaryKey } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+import { relations } from "drizzle-orm";
 
 // User schema
 export const users = pgTable("users", {
@@ -145,3 +146,26 @@ export const paymentMethodSchema = z.object({
 });
 
 export type PaymentMethod = z.infer<typeof paymentMethodSchema>;
+
+// Define relations between tables
+export const usersRelations = relations(users, ({ many }) => ({
+  sentLikes: many(likes, { relationName: "userLikes" }),
+  receivedLikes: many(likes, { relationName: "userLikedBy" }),
+  sentMessages: many(messages, { relationName: "userSentMessages" }),
+  receivedMessages: many(messages, { relationName: "userReceivedMessages" }),
+  paymentTransactions: many(paymentTransactions, { relationName: "userPaymentTransactions" }),
+}));
+
+export const likesRelations = relations(likes, ({ one }) => ({
+  liker: one(users, { relationName: "userLikes", fields: [likes.likerId], references: [users.id] }),
+  liked: one(users, { relationName: "userLikedBy", fields: [likes.likedId], references: [users.id] }),
+}));
+
+export const messagesRelations = relations(messages, ({ one }) => ({
+  sender: one(users, { relationName: "userSentMessages", fields: [messages.senderId], references: [users.id] }),
+  receiver: one(users, { relationName: "userReceivedMessages", fields: [messages.receiverId], references: [users.id] }),
+}));
+
+export const paymentTransactionsRelations = relations(paymentTransactions, ({ one }) => ({
+  user: one(users, { relationName: "userPaymentTransactions", fields: [paymentTransactions.userId], references: [users.id] }),
+}));

@@ -3,6 +3,8 @@ import { users, type User, type InsertUser, type UpdateUser,
   messages, type Message, type InsertMessage,
   subscriptionPlans, type SubscriptionPlan, type InsertSubscriptionPlan,
   paymentTransactions, type PaymentTransaction, type InsertPaymentTransaction } from "@shared/schema";
+import { db } from "./db";
+import { eq, and, or, desc, asc, sql, count } from "drizzle-orm";
 
 export interface IStorage {
   // User methods
@@ -383,4 +385,348 @@ export class MemStorage implements IStorage {
   }
 }
 
-export const storage = new MemStorage();
+export class DatabaseStorage implements IStorage {
+  // User methods
+  async getUser(id: number): Promise<User | undefined> {
+    const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user;
+  }
+
+  async getUserByUsername(username: string): Promise<User | undefined> {
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.username, username));
+    return user;
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, email));
+    return user;
+  }
+
+  async createUser(userData: InsertUser): Promise<User> {
+    const [user] = await db
+      .insert(users)
+      .values(userData)
+      .returning();
+    return user;
+  }
+
+  async updateUser(id: number, userData: UpdateUser): Promise<User | undefined> {
+    const [updated] = await db
+      .update(users)
+      .set(userData)
+      .where(eq(users.id, id))
+      .returning();
+    return updated;
+  }
+
+  async getAllUsers(): Promise<User[]> {
+    return db.select().from(users);
+  }
+
+  async getNearbyUsers(userId: number, maxDistance: number): Promise<User[]> {
+    const currentUser = await this.getUser(userId);
+    if (!currentUser) return [];
+
+    // In a real app, we would calculate distance based on geolocation
+    // For simplicity in this demo, return all users that match gender preference
+    // and aren't the current user
+    return db
+      .select()
+      .from(users)
+      .where(
+        and(
+          eq(users.gender, currentUser.genderPreference),
+          eq(users.genderPreference, currentUser.gender),
+          sql`${users.age} >= ${currentUser.ageRangeMin}`,
+          sql`${users.age} <= ${currentUser.ageRangeMax}`,
+          sql`${currentUser.age} >= ${users.ageRangeMin}`,
+          sql`${currentUser.age} <= ${users.ageRangeMax}`,
+          sql`${users.id} != ${userId}`
+        )
+      );
+  }
+
+  async updateLastActive(userId: number): Promise<void> {
+    await db
+      .update(users)
+      .set({ lastActive: new Date() })
+      .where(eq(users.id, userId));
+  }
+
+  // Like methods
+  async createLike(likeData: InsertLike): Promise<Like> {
+    const [like] = await db
+      .insert(likes)
+      .values(likeData)
+      .returning();
+    return like;
+  }
+
+  async getLikeByUserIds(likerId: number, likedId: number): Promise<Like | undefined> {
+    const [like] = await db
+      .select()
+      .from(likes)
+      .where(
+        and(
+          eq(likes.likerId, likerId),
+          eq(likes.likedId, likedId)
+        )
+      );
+    return like;
+  }
+
+  async getLikesByLikerId(likerId: number): Promise<Like[]> {
+    return db
+      .select()
+      .from(likes)
+      .where(eq(likes.likerId, likerId));
+  }
+
+  async getLikesForUser(likedId: number): Promise<Like[]> {
+    return db
+      .select()
+      .from(likes)
+      .where(eq(likes.likedId, likedId));
+  }
+
+  // Match methods
+  async getMatches(userId: number): Promise<User[]> {
+    // A match is when two users have liked each other
+    // This query finds all users where there is a mutual like
+    const matchedUsers = await db
+      .select({
+        user: users
+      })
+      .from(users)
+      .innerJoin(
+        likes,
+        and(
+          eq(likes.likedId, users.id),
+          eq(likes.likerId, userId)
+        )
+      )
+      .innerJoin(
+        // Subquery to find reverse matches
+        db
+          .select()
+          .from(likes)
+          .where(eq(likes.likedId, userId))
+          .as("reverse_likes"),
+        eq(likes.likedId, sql`reverse_likes.liker_id`)
+      );
+
+    return matchedUsers.map(match => match.user);
+  }
+
+  // Message methods
+  async createMessage(messageData: InsertMessage): Promise<Message> {
+    const [message] = await db
+      .insert(messages)
+      .values(messageData)
+      .returning();
+    return message;
+  }
+
+  async getMessagesBetweenUsers(user1Id: number, user2Id: number): Promise<Message[]> {
+    return db
+      .select()
+      .from(messages)
+      .where(
+        or(
+          and(
+            eq(messages.senderId, user1Id),
+            eq(messages.receiverId, user2Id)
+          ),
+          and(
+            eq(messages.senderId, user2Id),
+            eq(messages.receiverId, user1Id)
+          )
+        )
+      )
+      .orderBy(messages.createdAt);
+  }
+
+  async getConversations(userId: number): Promise<{user: User, lastMessage: Message}[]> {
+    // Find all users that the current user has exchanged messages with
+    const partners = await db
+      .select({
+        partnerId: sql<number>`
+          CASE 
+            WHEN ${messages.senderId} = ${userId} THEN ${messages.receiverId}
+            ELSE ${messages.senderId}
+          END
+        `
+      })
+      .from(messages)
+      .where(
+        or(
+          eq(messages.senderId, userId),
+          eq(messages.receiverId, userId)
+        )
+      )
+      .groupBy(sql`partnerId`);
+
+    const result: {user: User, lastMessage: Message}[] = [];
+
+    // For each partner, get their user profile and the most recent message
+    for (const { partnerId } of partners) {
+      const partner = await this.getUser(partnerId);
+      if (partner) {
+        const [lastMessage] = await db
+          .select()
+          .from(messages)
+          .where(
+            or(
+              and(
+                eq(messages.senderId, userId),
+                eq(messages.receiverId, partnerId)
+              ),
+              and(
+                eq(messages.senderId, partnerId),
+                eq(messages.receiverId, userId)
+              )
+            )
+          )
+          .orderBy(desc(messages.createdAt))
+          .limit(1);
+        
+        if (lastMessage) {
+          result.push({
+            user: partner,
+            lastMessage,
+          });
+        }
+      }
+    }
+
+    // Sort conversations by most recent message
+    return result.sort((a, b) => 
+      b.lastMessage.createdAt.getTime() - a.lastMessage.createdAt.getTime()
+    );
+  }
+
+  async markMessagesAsRead(receiverId: number, senderId: number): Promise<void> {
+    await db
+      .update(messages)
+      .set({ read: true })
+      .where(
+        and(
+          eq(messages.receiverId, receiverId),
+          eq(messages.senderId, senderId),
+          eq(messages.read, false)
+        )
+      );
+  }
+
+  // Stripe and subscription methods
+  async updateStripeCustomerId(userId: number, customerId: string): Promise<User> {
+    const [user] = await db
+      .update(users)
+      .set({ stripeCustomerId: customerId })
+      .where(eq(users.id, userId))
+      .returning();
+    
+    if (!user) {
+      throw new Error(`User with ID ${userId} not found`);
+    }
+    
+    return user;
+  }
+
+  async updateUserSubscription(
+    userId: number, 
+    subscriptionId: string, 
+    tier: string, 
+    status: string, 
+    expiresAt: Date | null
+  ): Promise<User> {
+    const [user] = await db
+      .update(users)
+      .set({
+        stripeSubscriptionId: subscriptionId,
+        subscriptionTier: tier,
+        subscriptionStatus: status,
+        subscriptionExpiresAt: expiresAt,
+        isPremium: status === "active"
+      })
+      .where(eq(users.id, userId))
+      .returning();
+    
+    if (!user) {
+      throw new Error(`User with ID ${userId} not found`);
+    }
+    
+    return user;
+  }
+
+  // Subscription plan methods
+  async createSubscriptionPlan(planData: InsertSubscriptionPlan): Promise<SubscriptionPlan> {
+    const [plan] = await db
+      .insert(subscriptionPlans)
+      .values(planData)
+      .returning();
+    return plan;
+  }
+
+  async getSubscriptionPlan(id: number): Promise<SubscriptionPlan | undefined> {
+    const [plan] = await db
+      .select()
+      .from(subscriptionPlans)
+      .where(eq(subscriptionPlans.id, id));
+    return plan;
+  }
+
+  async getAllSubscriptionPlans(): Promise<SubscriptionPlan[]> {
+    return db.select().from(subscriptionPlans);
+  }
+
+  async getActiveSubscriptionPlans(): Promise<SubscriptionPlan[]> {
+    return db
+      .select()
+      .from(subscriptionPlans)
+      .where(eq(subscriptionPlans.isActive, true));
+  }
+
+  // Payment transaction methods
+  async createPaymentTransaction(transactionData: InsertPaymentTransaction): Promise<PaymentTransaction> {
+    const [transaction] = await db
+      .insert(paymentTransactions)
+      .values(transactionData)
+      .returning();
+    return transaction;
+  }
+
+  async getPaymentTransaction(id: number): Promise<PaymentTransaction | undefined> {
+    const [transaction] = await db
+      .select()
+      .from(paymentTransactions)
+      .where(eq(paymentTransactions.id, id));
+    return transaction;
+  }
+
+  async getUserPaymentTransactions(userId: number): Promise<PaymentTransaction[]> {
+    return db
+      .select()
+      .from(paymentTransactions)
+      .where(eq(paymentTransactions.userId, userId))
+      .orderBy(desc(paymentTransactions.createdAt));
+  }
+
+  async updatePaymentTransactionStatus(id: number, status: string): Promise<PaymentTransaction | undefined> {
+    const [transaction] = await db
+      .update(paymentTransactions)
+      .set({ status })
+      .where(eq(paymentTransactions.id, id))
+      .returning();
+    return transaction;
+  }
+}
+
+// Use the database storage implementation
+export const storage = new DatabaseStorage();
