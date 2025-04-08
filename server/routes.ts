@@ -12,6 +12,14 @@ import { z } from "zod";
 import session from "express-session";
 import MemoryStore from "memorystore";
 import crypto from "crypto";
+import Stripe from "stripe";
+import { 
+  createCustomer, 
+  createPaymentIntent, 
+  createSubscription, 
+  cancelSubscription, 
+  handleWebhookEvent 
+} from "./services/stripe";
 
 // Define session interface
 interface CustomSession {
@@ -337,6 +345,158 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Payment and Subscription Routes
+  
+  // Get subscription plans
+  app.get("/api/subscription-plans", async (_req: Request, res: Response) => {
+    try {
+      const plans = await storage.getActiveSubscriptionPlans();
+      return res.status(200).json(plans);
+    } catch (error) {
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+  
+  // Create payment intent for one-time purchase
+  app.post("/api/create-payment-intent", isAuthenticated, async (req: RequestWithSession, res: Response) => {
+    try {
+      const { amount, description } = req.body;
+      
+      if (!amount || typeof amount !== 'number') {
+        return res.status(400).json({ message: "Valid amount is required" });
+      }
+      
+      const paymentIntent = await createPaymentIntent(
+        req.session.userId!,
+        amount,
+        'usd',
+        description || 'Dating App Purchase'
+      );
+      
+      return res.status(200).json({
+        clientSecret: paymentIntent.client_secret
+      });
+    } catch (error) {
+      console.error("Error creating payment intent:", error);
+      return res.status(500).json({ 
+        message: "Failed to create payment intent",
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+  
+  // Create or update subscription
+  app.post("/api/create-subscription", isAuthenticated, async (req: RequestWithSession, res: Response) => {
+    try {
+      const { priceId, tier } = req.body;
+      
+      if (!priceId || !tier) {
+        return res.status(400).json({ message: "Price ID and tier are required" });
+      }
+      
+      const subscription = await createSubscription(
+        req.session.userId!,
+        priceId,
+        tier
+      );
+      
+      // Get payment intent client secret for frontend
+      const invoice = subscription.latest_invoice as Stripe.Invoice;
+      let clientSecret = null;
+      
+      if (invoice && invoice.payment_intent && typeof invoice.payment_intent !== 'string') {
+        clientSecret = invoice.payment_intent.client_secret;
+      }
+      
+      return res.status(200).json({
+        subscriptionId: subscription.id,
+        clientSecret,
+        status: subscription.status
+      });
+    } catch (error) {
+      console.error("Error creating subscription:", error);
+      return res.status(500).json({ 
+        message: "Failed to create subscription",
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+  
+  // Cancel subscription
+  app.post("/api/cancel-subscription", isAuthenticated, async (req: RequestWithSession, res: Response) => {
+    try {
+      await cancelSubscription(req.session.userId!);
+      return res.status(200).json({ message: "Subscription canceled successfully" });
+    } catch (error) {
+      console.error("Error canceling subscription:", error);
+      return res.status(500).json({ 
+        message: "Failed to cancel subscription",
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+  
+  // Get user subscription
+  app.get("/api/my-subscription", isAuthenticated, async (req: RequestWithSession, res: Response) => {
+    try {
+      const user = await storage.getUser(req.session.userId!);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      
+      return res.status(200).json({
+        isPremium: user.isPremium,
+        subscriptionTier: user.subscriptionTier,
+        subscriptionStatus: user.subscriptionStatus,
+        subscriptionExpiresAt: user.subscriptionExpiresAt
+      });
+    } catch (error) {
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+  
+  // Get payment history
+  app.get("/api/payment-history", isAuthenticated, async (req: RequestWithSession, res: Response) => {
+    try {
+      const transactions = await storage.getUserPaymentTransactions(req.session.userId!);
+      return res.status(200).json(transactions);
+    } catch (error) {
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+  
+  // Webhook endpoint for Stripe events
+  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  
+  app.post("/api/webhook", express.raw({type: 'application/json'}), async (req: Request, res: Response) => {
+    const sig = req.headers['stripe-signature'];
+    
+    if (!sig || !endpointSecret) {
+      return res.status(400).send('Webhook signature or secret missing');
+    }
+    
+    let event: Stripe.Event;
+    
+    try {
+      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+        apiVersion: '2023-10-16',
+      });
+      
+      event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
+    } catch (err) {
+      console.error(`Webhook Error: ${err instanceof Error ? err.message : String(err)}`);
+      return res.status(400).send(`Webhook Error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    
+    try {
+      await handleWebhookEvent(event);
+      res.json({received: true});
+    } catch (error) {
+      console.error(`Error processing webhook: ${error instanceof Error ? error.message : String(error)}`);
+      return res.status(500).send(`Error processing webhook: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
+  
   const httpServer = createServer(app);
   return httpServer;
 }

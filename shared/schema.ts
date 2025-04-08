@@ -19,6 +19,12 @@ export const users = pgTable("users", {
   ageRangeMin: integer("age_range_min").default(18).notNull(),
   ageRangeMax: integer("age_range_max").default(100).notNull(),
   maxDistance: integer("max_distance").default(50).notNull(),
+  isPremium: boolean("is_premium").default(false).notNull(),
+  stripeCustomerId: text("stripe_customer_id"),
+  stripeSubscriptionId: text("stripe_subscription_id"),
+  subscriptionStatus: text("subscription_status").default("inactive").notNull(),
+  subscriptionTier: text("subscription_tier").default("free").notNull(),
+  subscriptionExpiresAt: timestamp("subscription_expires_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   lastActive: timestamp("last_active").defaultNow().notNull(),
 });
@@ -38,6 +44,33 @@ export const messages = pgTable("messages", {
   receiverId: integer("receiver_id").notNull().references(() => users.id),
   content: text("content").notNull(),
   read: boolean("read").default(false).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// Subscription plans schema
+export const subscriptionPlans = pgTable("subscription_plans", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  description: text("description").notNull(),
+  price: integer("price").notNull(), // in cents
+  stripePriceId: text("stripe_price_id").notNull(),
+  features: jsonb("features").default([]).notNull(),
+  durationDays: integer("duration_days").notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// Payment transactions schema
+export const paymentTransactions = pgTable("payment_transactions", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => users.id),
+  amount: integer("amount").notNull(), // in cents
+  currency: text("currency").default("usd").notNull(),
+  stripePaymentIntentId: text("stripe_payment_intent_id"),
+  stripeCustomerId: text("stripe_customer_id"),
+  status: text("status").notNull(), // 'pending', 'succeeded', 'failed'
+  description: text("description"),
+  metadata: jsonb("metadata").default({}),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -73,6 +106,17 @@ export const insertMessageSchema = createInsertSchema(messages).omit({
   read: true,
 });
 
+// Create insert schemas for new tables
+export const insertSubscriptionPlanSchema = createInsertSchema(subscriptionPlans).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertPaymentTransactionSchema = createInsertSchema(paymentTransactions).omit({
+  id: true,
+  createdAt: true,
+});
+
 // Types
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
@@ -85,3 +129,19 @@ export type InsertLike = z.infer<typeof insertLikeSchema>;
 
 export type Message = typeof messages.$inferSelect;
 export type InsertMessage = z.infer<typeof insertMessageSchema>;
+
+export type SubscriptionPlan = typeof subscriptionPlans.$inferSelect;
+export type InsertSubscriptionPlan = z.infer<typeof insertSubscriptionPlanSchema>;
+
+export type PaymentTransaction = typeof paymentTransactions.$inferSelect;
+export type InsertPaymentTransaction = z.infer<typeof insertPaymentTransactionSchema>;
+
+// Payment method schema for client-side validation
+export const paymentMethodSchema = z.object({
+  cardNumber: z.string().min(13).max(19),
+  expiryMonth: z.string().min(1).max(2),
+  expiryYear: z.string().min(2).max(4),
+  cvc: z.string().min(3).max(4),
+});
+
+export type PaymentMethod = z.infer<typeof paymentMethodSchema>;

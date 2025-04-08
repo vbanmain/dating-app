@@ -1,6 +1,8 @@
 import { users, type User, type InsertUser, type UpdateUser, 
   likes, type Like, type InsertLike, 
-  messages, type Message, type InsertMessage } from "@shared/schema";
+  messages, type Message, type InsertMessage,
+  subscriptionPlans, type SubscriptionPlan, type InsertSubscriptionPlan,
+  paymentTransactions, type PaymentTransaction, type InsertPaymentTransaction } from "@shared/schema";
 
 export interface IStorage {
   // User methods
@@ -12,6 +14,8 @@ export interface IStorage {
   getAllUsers(): Promise<User[]>;
   getNearbyUsers(userId: number, maxDistance: number): Promise<User[]>;
   updateLastActive(userId: number): Promise<void>;
+  updateStripeCustomerId(userId: number, customerId: string): Promise<User>;
+  updateUserSubscription(userId: number, subscriptionId: string, tier: string, status: string, expiresAt: Date | null): Promise<User>;
   
   // Like methods
   createLike(like: InsertLike): Promise<Like>;
@@ -27,23 +31,43 @@ export interface IStorage {
   getMessagesBetweenUsers(user1Id: number, user2Id: number): Promise<Message[]>;
   getConversations(userId: number): Promise<{user: User, lastMessage: Message}[]>;
   markMessagesAsRead(receiverId: number, senderId: number): Promise<void>;
+  
+  // Subscription plan methods
+  createSubscriptionPlan(plan: InsertSubscriptionPlan): Promise<SubscriptionPlan>;
+  getSubscriptionPlan(id: number): Promise<SubscriptionPlan | undefined>;
+  getAllSubscriptionPlans(): Promise<SubscriptionPlan[]>;
+  getActiveSubscriptionPlans(): Promise<SubscriptionPlan[]>;
+  
+  // Payment transaction methods
+  createPaymentTransaction(transaction: InsertPaymentTransaction): Promise<PaymentTransaction>;
+  getPaymentTransaction(id: number): Promise<PaymentTransaction | undefined>;
+  getUserPaymentTransactions(userId: number): Promise<PaymentTransaction[]>;
+  updatePaymentTransactionStatus(id: number, status: string): Promise<PaymentTransaction | undefined>;
 }
 
 export class MemStorage implements IStorage {
   private users: Map<number, User>;
   private likes: Map<number, Like>;
   private messages: Map<number, Message>;
+  private subscriptionPlans: Map<number, SubscriptionPlan>;
+  private paymentTransactions: Map<number, PaymentTransaction>;
   private userIdCounter: number;
   private likeIdCounter: number;
   private messageIdCounter: number;
+  private subscriptionPlanIdCounter: number;
+  private paymentTransactionIdCounter: number;
 
   constructor() {
     this.users = new Map();
     this.likes = new Map();
     this.messages = new Map();
+    this.subscriptionPlans = new Map();
+    this.paymentTransactions = new Map();
     this.userIdCounter = 1;
     this.likeIdCounter = 1;
     this.messageIdCounter = 1;
+    this.subscriptionPlanIdCounter = 1;
+    this.paymentTransactionIdCounter = 1;
   }
 
   // User methods
@@ -84,6 +108,12 @@ export class MemStorage implements IStorage {
       ageRangeMin: userData.ageRangeMin ?? 18,
       ageRangeMax: userData.ageRangeMax ?? 100,
       maxDistance: userData.maxDistance ?? 50,
+      isPremium: userData.isPremium ?? false,
+      stripeCustomerId: userData.stripeCustomerId ?? null,
+      stripeSubscriptionId: userData.stripeSubscriptionId ?? null,
+      subscriptionStatus: userData.subscriptionStatus ?? "inactive",
+      subscriptionTier: userData.subscriptionTier ?? "free",
+      subscriptionExpiresAt: userData.subscriptionExpiresAt ?? null,
       createdAt: now,
       lastActive: now,
     };
@@ -259,6 +289,97 @@ export class MemStorage implements IStorage {
         this.messages.set(message.id, message);
       }
     }
+  }
+  
+  // Stripe and subscription methods
+  async updateStripeCustomerId(userId: number, customerId: string): Promise<User> {
+    const user = await this.getUser(userId);
+    if (!user) {
+      throw new Error(`User with ID ${userId} not found`);
+    }
+    
+    user.stripeCustomerId = customerId;
+    this.users.set(userId, user);
+    return user;
+  }
+  
+  async updateUserSubscription(
+    userId: number, 
+    subscriptionId: string, 
+    tier: string, 
+    status: string, 
+    expiresAt: Date | null
+  ): Promise<User> {
+    const user = await this.getUser(userId);
+    if (!user) {
+      throw new Error(`User with ID ${userId} not found`);
+    }
+    
+    user.stripeSubscriptionId = subscriptionId;
+    user.subscriptionTier = tier;
+    user.subscriptionStatus = status;
+    user.subscriptionExpiresAt = expiresAt;
+    user.isPremium = status === "active";
+    
+    this.users.set(userId, user);
+    return user;
+  }
+  
+  // Subscription plan methods
+  async createSubscriptionPlan(planData: InsertSubscriptionPlan): Promise<SubscriptionPlan> {
+    const id = this.subscriptionPlanIdCounter++;
+    const plan: SubscriptionPlan = {
+      ...planData,
+      id,
+      createdAt: new Date(),
+    };
+    this.subscriptionPlans.set(id, plan);
+    return plan;
+  }
+  
+  async getSubscriptionPlan(id: number): Promise<SubscriptionPlan | undefined> {
+    return this.subscriptionPlans.get(id);
+  }
+  
+  async getAllSubscriptionPlans(): Promise<SubscriptionPlan[]> {
+    return Array.from(this.subscriptionPlans.values());
+  }
+  
+  async getActiveSubscriptionPlans(): Promise<SubscriptionPlan[]> {
+    return Array.from(this.subscriptionPlans.values())
+      .filter(plan => plan.isActive);
+  }
+  
+  // Payment transaction methods
+  async createPaymentTransaction(transactionData: InsertPaymentTransaction): Promise<PaymentTransaction> {
+    const id = this.paymentTransactionIdCounter++;
+    const transaction: PaymentTransaction = {
+      ...transactionData,
+      id,
+      createdAt: new Date(),
+    };
+    this.paymentTransactions.set(id, transaction);
+    return transaction;
+  }
+  
+  async getPaymentTransaction(id: number): Promise<PaymentTransaction | undefined> {
+    return this.paymentTransactions.get(id);
+  }
+  
+  async getUserPaymentTransactions(userId: number): Promise<PaymentTransaction[]> {
+    return Array.from(this.paymentTransactions.values())
+      .filter(transaction => transaction.userId === userId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+  
+  async updatePaymentTransactionStatus(id: number, status: string): Promise<PaymentTransaction | undefined> {
+    const transaction = await this.getPaymentTransaction(id);
+    if (transaction) {
+      transaction.status = status;
+      this.paymentTransactions.set(id, transaction);
+      return transaction;
+    }
+    return undefined;
   }
 }
 

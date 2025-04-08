@@ -11,6 +11,8 @@ import Profile from "./pages/Profile";
 import ProfileEdit from "./pages/ProfileEdit";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
+import Checkout from "./pages/Checkout";
+import Subscribe from "./pages/Subscribe";
 import { useAuth } from "./hooks/useAuth";
 
 function Router() {
@@ -38,6 +40,8 @@ function Router() {
         <Route path="/profile" component={Profile} />
         <Route path="/profile/edit" component={ProfileEdit} />
         <Route path="/profile/:id">{(params) => <Profile userId={parseInt(params.id)} />}</Route>
+        <Route path="/checkout" component={Checkout} />
+        <Route path="/subscribe" component={Subscribe} />
         <Route component={NotFound} />
       </Switch>
     </AppShell>
