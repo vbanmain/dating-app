@@ -254,24 +254,57 @@ const Messages = () => {
               
               {/* Message Input */}
               <div className="p-4 border-t border-neutral-200 dark:border-neutral-700">
-                {/* Ice Breaker Suggestions */}
+                {/* Ice Breaker Suggestions - Full card for empty conversations */}
                 {messages.length === 0 && iceBreakers.length > 0 && (
                   <div className="mb-4">
                     <IceBreakerSuggestions 
                       iceBreakers={iceBreakers}
                       onSelect={handleIceBreakerSelect}
+                      onSendDirectly={(text) => {
+                        if (activeConversation) {
+                          sendMessage({
+                            content: text,
+                            receiverId: activeConversation,
+                            senderId: user?.id as number
+                          });
+                        }
+                      }}
+                      showSendButton={true}
                     />
                   </div>
                 )}
                 
                 <form onSubmit={handleSendMessage} className="flex items-center">
-                  <Input
-                    type="text"
-                    placeholder="Type a message..."
-                    value={messageText}
-                    onChange={(e) => setMessageText(e.target.value)}
-                    className="flex-1"
-                  />
+                  <div className="flex-1 flex">
+                    <Input
+                      type="text"
+                      placeholder="Type a message..."
+                      value={messageText}
+                      onChange={(e) => setMessageText(e.target.value)}
+                      className="flex-1 rounded-r-none"
+                    />
+                    
+                    {/* Ice Breaker Button - Always visible in message input */}
+                    {iceBreakers.length > 0 && (
+                      <div className="border border-l-0 border-input px-1 flex items-center bg-background">
+                        <IceBreakerSuggestions 
+                          iceBreakers={iceBreakers}
+                          onSelect={handleIceBreakerSelect}
+                          onSendDirectly={(text) => {
+                            if (activeConversation) {
+                              sendMessage({
+                                content: text,
+                                receiverId: activeConversation,
+                                senderId: user?.id as number
+                              });
+                            }
+                          }}
+                          compact={true}
+                        />
+                      </div>
+                    )}
+                  </div>
+                  
                   <Button 
                     type="submit" 
                     className="ml-2"

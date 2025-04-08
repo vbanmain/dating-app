@@ -2,20 +2,33 @@ import { useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { IceBreaker } from "@/lib/iceBreakers";
-import { Sparkle, ChevronLeft, ChevronRight, Check } from "lucide-react";
+import { Sparkle, ChevronLeft, ChevronRight, Check, SendHorizonal, Edit, MessageSquare } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 interface IceBreakerSuggestionsProps {
   iceBreakers: IceBreaker[];
   onSelect: (text: string) => void;
+  onSendDirectly?: (text: string) => void;
   className?: string;
+  compact?: boolean;
+  showSendButton?: boolean;
 }
 
 export function IceBreakerSuggestions({ 
   iceBreakers, 
-  onSelect, 
-  className 
+  onSelect,
+  onSendDirectly,
+  className,
+  compact = false,
+  showSendButton = false
 }: IceBreakerSuggestionsProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [usedIndices, setUsedIndices] = useState<number[]>([]);
@@ -39,6 +52,13 @@ export function IceBreakerSuggestions({
     onSelect(currentIceBreaker.text);
     setUsedIndices([...usedIndices, currentIndex]);
   };
+
+  const handleSendDirectly = () => {
+    if (onSendDirectly) {
+      onSendDirectly(currentIceBreaker.text);
+      setUsedIndices([...usedIndices, currentIndex]);
+    }
+  };
   
   // Category colors
   const getCategoryColor = (category: IceBreaker['category']) => {
@@ -57,7 +77,65 @@ export function IceBreakerSuggestions({
   };
   
   const isUsed = usedIndices.includes(currentIndex);
+
+  // Compact dropdown version
+  if (compact) {
+    return (
+      <DropdownMenu>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <Button 
+                  variant="outline" 
+                  size="icon" 
+                  className={cn("h-9 w-9", className)}
+                >
+                  <Sparkle className="h-4 w-4 text-primary" />
+                </Button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              <p>Ice Breaker Suggestions</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+        
+        <DropdownMenuContent align="end" className="w-[300px]">
+          {iceBreakers.map((iceBreaker, index) => (
+            <DropdownMenuItem 
+              key={index} 
+              className="flex flex-col items-start py-2 cursor-pointer"
+              onSelect={(e) => {
+                e.preventDefault();
+                if (onSendDirectly) {
+                  onSendDirectly(iceBreaker.text);
+                } else {
+                  onSelect(iceBreaker.text);
+                }
+                setUsedIndices([...usedIndices, index]);
+              }}
+            >
+              <div className="flex items-center w-full">
+                <Badge
+                  variant="outline"
+                  className={cn("text-xs mr-2", getCategoryColor(iceBreaker.category))}
+                >
+                  {iceBreaker.category}
+                </Badge>
+                {usedIndices.includes(index) && (
+                  <span className="text-xs text-neutral-500 ml-auto">Used</span>
+                )}
+              </div>
+              <p className="text-sm mt-1">{iceBreaker.text}</p>
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  }
   
+  // Standard card version
   return (
     <Card className={cn("w-full", className)}>
       <CardContent className="p-4">
@@ -96,21 +174,40 @@ export function IceBreakerSuggestions({
             </Button>
           </div>
           
-          <Button 
-            size="sm" 
-            className="gap-1"
-            onClick={handleSelect}
-            disabled={isUsed}
-          >
-            {isUsed ? (
-              <>
-                <Check className="h-4 w-4" />
-                Used
-              </>
-            ) : (
-              "Use This"
+          <div className="flex gap-2">
+            {showSendButton && onSendDirectly && (
+              <Button 
+                size="sm" 
+                className="gap-1"
+                onClick={handleSendDirectly}
+                disabled={isUsed}
+                variant="default"
+              >
+                <SendHorizonal className="h-4 w-4 mr-1" />
+                Send Now
+              </Button>
             )}
-          </Button>
+            
+            <Button 
+              size="sm" 
+              className="gap-1"
+              onClick={handleSelect}
+              disabled={isUsed}
+              variant={showSendButton ? "outline" : "default"}
+            >
+              {isUsed ? (
+                <>
+                  <Check className="h-4 w-4" />
+                  Used
+                </>
+              ) : (
+                <>
+                  <Edit className="h-4 w-4 mr-1" />
+                  Edit First
+                </>
+              )}
+            </Button>
+          </div>
         </div>
       </CardContent>
     </Card>
