@@ -10,9 +10,11 @@ import {
 import { useAuth } from "@/hooks/useAuth";
 import { useMessages } from "@/hooks/useMessages";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
-import { Send, ArrowLeft } from "lucide-react";
+import { Send, ArrowLeft, MessageCircle, Sparkle } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { Message } from "@shared/schema";
+import { IceBreakerSuggestions } from "@/components/messages/IceBreakerSuggestions";
+import { generateIceBreakers } from "@/lib/iceBreakers";
 
 const Messages = () => {
   const [match, params] = useRoute("/messages/:id");
@@ -29,6 +31,7 @@ const Messages = () => {
     loadMessages
   } = useMessages();
   const [messageText, setMessageText] = useState("");
+  const [iceBreakers, setIceBreakers] = useState<ReturnType<typeof generateIceBreakers>>([]);
 
   useEffect(() => {
     loadConversations();
@@ -46,6 +49,17 @@ const Messages = () => {
     // Scroll to bottom when messages change
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+  
+  // Generate ice breakers when active conversation changes
+  useEffect(() => {
+    if (activeConversation && user) {
+      const matchedUser = conversations.find(c => c.user.id === activeConversation)?.user;
+      if (matchedUser) {
+        const suggestions = generateIceBreakers(user, matchedUser);
+        setIceBreakers(suggestions);
+      }
+    }
+  }, [activeConversation, conversations, user]);
 
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
@@ -58,6 +72,17 @@ const Messages = () => {
     });
     
     setMessageText("");
+  };
+  
+  const handleIceBreakerSelect = (text: string) => {
+    setMessageText(text);
+    // Optionally auto-focus the input
+    setTimeout(() => {
+      const inputElement = document.querySelector('input[type="text"]') as HTMLInputElement;
+      if (inputElement) {
+        inputElement.focus();
+      }
+    }, 100);
   };
 
   return (
@@ -85,7 +110,10 @@ const Messages = () => {
                   <div className="relative">
                     <Avatar className="h-12 w-12">
                       <AvatarImage 
-                        src={convo.user.photoUrls?.length ? convo.user.photoUrls[0] : undefined} 
+                        src={Array.isArray(convo.user.photoUrls) && convo.user.photoUrls.length > 0 
+                          ? convo.user.photoUrls[0] as string
+                          : undefined
+                        } 
                         alt={convo.user.name} 
                       />
                       <AvatarFallback>{convo.user.name.charAt(0)}</AvatarFallback>
@@ -144,10 +172,13 @@ const Messages = () => {
                   <>
                     <Avatar className="h-10 w-10">
                       <AvatarImage 
-                        src={conversations.find(c => c.user.id === activeConversation)?.user.photoUrls?.length 
-                          ? conversations.find(c => c.user.id === activeConversation)?.user.photoUrls[0] 
-                          : undefined
-                        } 
+                        src={(() => {
+                          const activeUser = conversations.find(c => c.user.id === activeConversation)?.user;
+                          if (!activeUser) return undefined;
+                          return Array.isArray(activeUser.photoUrls) && activeUser.photoUrls.length > 0
+                            ? activeUser.photoUrls[0] as string
+                            : undefined;
+                        })()}
                         alt={conversations.find(c => c.user.id === activeConversation)?.user.name} 
                       />
                       <AvatarFallback>
@@ -223,6 +254,16 @@ const Messages = () => {
               
               {/* Message Input */}
               <div className="p-4 border-t border-neutral-200 dark:border-neutral-700">
+                {/* Ice Breaker Suggestions */}
+                {messages.length === 0 && iceBreakers.length > 0 && (
+                  <div className="mb-4">
+                    <IceBreakerSuggestions 
+                      iceBreakers={iceBreakers}
+                      onSelect={handleIceBreakerSelect}
+                    />
+                  </div>
+                )}
+                
                 <form onSubmit={handleSendMessage} className="flex items-center">
                   <Input
                     type="text"
